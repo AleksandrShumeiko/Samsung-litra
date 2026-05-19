@@ -1,494 +1,1302 @@
-package litra.mmm; // **Важно: Замените на ваш пакет**
+package litra.mmm;
 
-import androidx.appcompat.app.AlertDialog;
-import androidx.appcompat.app.AppCompatActivity;
+import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.BufferedReader;
-import java.io.IOException;
+import java.io.BufferedWriter;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.text.SimpleDateFormat;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Date;
-import java.util.List;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Random;
-import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-public class MainActivity extends AppCompatActivity {
-
-    private static final int PICK_FILE_REQUEST_CODE = 1001;
-    private static final int TEXT_TO_HIDE_INTERVAL_MS = 5 * 60 * 1000; // 5 минут
-    private static final int TEST_INTERVAL_MS = 10 * 1000; // 10 секунд для теста
-    private static final float INITIAL_HIDE_PERCENTAGE = 0.10f; // 10%
-    private static final float HIDE_PERCENTAGE_INCREASE = 0.15f; // +15%
-
+public class MainActivity extends Activity {
+    private static final long INTERVAL = 5 * 60 * 1000L;
+    private static final int REQUEST_SAVE_PROGRESS = 200;
+    private LinearLayout urlPanel;
+    private EditText urlEditText;
     private EditText poemEditText;
-    private TextView timerTextView;
-    private TextView scoreTextView;
-    private Button loadButton, saveButton, checkButton;
+    private TextView timerScoreTextView;
+    private Button loadInternetButton;
+    private Button nextStageButton;
+    private Button saveButton;
+    private Button checkButton;
 
-    private String originalPoem = ""; // Хранит оригинальный текст стиха
-    private String currentPoemState = ""; // Хранит текущее состояние текста в EditText
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private String originalText = "";
+    private ArrayList<Token> tokens = new ArrayList<>();
+    private ArrayList<String> originalWords = new ArrayList<>();
+    private ArrayList<Integer> hideOrder = new ArrayList<>();
+    private HashSet<Integer> hiddenWordIndexes = new HashSet<>();
+    private HashMap<Integer, String> savedAnswers = new HashMap<>();
+    private int hideStep = 0;
+    private boolean sessionActive = false;
+    private long elapsedBeforeResumeMs = 0L;
+    private long lastResumeRealtimeMs = 0L;
+    private long nextHideAtElapsedMs = INTERVAL;
+    private final Runnable timerRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!sessionActive) {
+                return;
+            }
 
-    private long startTime = 0L;
-    private long timeInMilliseconds = 0L;
-    private long timeSwapBuff = 0L;
-    private long updatedTime = 0L;
-    private int seconds, minutes, milliseconds;
-    private Handler handler = new Handler();
+            long elapsed = getCurrentElapsedMs();
 
-    private float currentHidePercentage = INITIAL_HIDE_PERCENTAGE;
-    private int wordsToHideCount = 0;
-    private List<String> originalWords = new ArrayList<>(); // Для более точного скрытия/проверки
+            if (elapsed >= nextHideAtElapsedMs) {
+                handleAutomaticStageChange();
+                nextHideAtElapsedMs = getCurrentElapsedMs() + INTERVAL;
+            }
 
-    // Для сохранения состояния
-    private static final String KEY_ORIGINAL_POEM = "originalPoem";
-    private static final String KEY_CURRENT_POEM_STATE = "currentPoemState";
-    private static final String KEY_START_TIME = "startTime";
-    private static final String KEY_TIME_IN_MILLISECONDS = "timeInMilliseconds";
-    private static final String KEY_TIMER_RUNNING = "timerRunning";
-    private static final String KEY_CURRENT_HIDE_PERCENTAGE = "currentHidePercentage";
-    private static final String KEY_ORIGINAL_WORDS = "originalWords"; // Для сохранения слов
-    private static final String KEY_HAS_RUN_FOR_TEST = "hasRunForTest"; // Флаг для интервала
-
-
-    private boolean isTimerRunning = false;
-    private boolean hasRunForTestInterval = false; // Флаг, чтобы избежать мгновенного скрытия при старте
-
+            updateTimerAndScoreText();
+            handler.postDelayed(this, 1000L);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        urlPanel = findViewById(R.id.urlPanel);
+
+        urlEditText = findViewById(R.id.urlEditText);
         poemEditText = findViewById(R.id.poemEditText);
-        timerTextView = findViewById(R.id.timerTextView);
-        scoreTextView = findViewById(R.id.scoreTextView);
-        loadButton = findViewById(R.id.loadButton);
+        timerScoreTextView = findViewById(R.id.timerScoreTextView);
+
+        loadInternetButton = findViewById(R.id.loadInternetButton);
+        nextStageButton = findViewById(R.id.nextStageButton);
         saveButton = findViewById(R.id.saveButton);
         checkButton = findViewById(R.id.checkButton);
 
-        // Инициализация таймера
-        timerTextView.setText("Таймер: 00:00");
+        nextStageButton.setEnabled(false);
+        saveButton.setEnabled(false);
+        checkButton.setEnabled(false);
 
-        // Восстановление состояния, если оно есть
-        if (savedInstanceState != null) {
-            originalPoem = savedInstanceState.getString(KEY_ORIGINAL_POEM, "");
-            poemEditText.setText(savedInstanceState.getString(KEY_CURRENT_POEM_STATE, ""));
-            startTime = savedInstanceState.getLong(KEY_START_TIME, 0L);
-            timeInMilliseconds = savedInstanceState.getLong(KEY_TIME_IN_MILLISECONDS, 0L);
-            isTimerRunning = savedInstanceState.getBoolean(KEY_TIMER_RUNNING, false);
-            currentHidePercentage = savedInstanceState.getFloat(KEY_CURRENT_HIDE_PERCENTAGE, INITIAL_HIDE_PERCENTAGE);
-            currentPoemState = poemEditText.getText().toString(); // Обновляем из EditText
+        loadInternetButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                String url = urlEditText.getText().toString().trim();
 
-            // Восстановление списка слов, если он был сохранен
-            if (savedInstanceState.containsKey(KEY_ORIGINAL_WORDS)) {
-                originalWords = savedInstanceState.getStringArrayList(KEY_ORIGINAL_WORDS);
-            }
+                if (url.isEmpty()) {
+                    Toast.makeText(
+                            MainActivity.this,
+                            "Вставьте ссылку с ilibrary.ru или culture.ru.",
+                            Toast.LENGTH_SHORT
+                    ).show();
+                    return;
+                }
 
-            if (isTimerRunning) {
-                // Обновляем время и запускаем таймер снова
-                timeSwapBuff = timeInMilliseconds; // Используем сохраненное время
-                startTime = SystemClock.uptimeMillis() - timeSwapBuff;
-                handler.postDelayed(updateTimerThread, 0); // Запускаем обновление сразу
-            } else {
-                // Если таймер не был запущен, просто отображаем сохраненное время
-                updateTimerTextView();
-            }
-            hasRunForTestInterval = savedInstanceState.getBoolean(KEY_HAS_RUN_FOR_TEST, false);
-        }
+                if (!isSupportedPoemUrl(url)) {
+                    Toast.makeText(
+                            MainActivity.this,
+                            "Нужна ссылка с ilibrary.ru или конкретная страница стихотворения с culture.ru.",
+                            Toast.LENGTH_LONG
+                    ).show();
+                    return;
+                }
 
-        // Обработчики нажатий кнопок
-        loadButton.setOnClickListener(v -> openFilePicker());
-        saveButton.setOnClickListener(v -> savePoemToFile()); // TODO: Реализовать сохранение
-        checkButton.setOnClickListener(v -> checkPoem());
-
-        // Обработчик изменений текста в EditText
-        poemEditText.setOnClickListener(v -> {
-            if (!isTimerRunning) {
-                startTimer();
+                downloadPoemFromInternet(url);
             }
         });
-    }
 
-    // Метод для открытия файлового менеджера
-    private void openFilePicker() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("text/plain"); // Указываем, что ищем текстовые файлы
-        startActivityForResult(intent, PICK_FILE_REQUEST_CODE);
-    }
-
-    // Обработка результата выбора файла
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == PICK_FILE_REQUEST_CODE && resultCode == RESULT_OK && data != null) {
-            Uri uri = data.getData();
-            if (uri != null) {
-                try {
-                    originalPoem = readTextFromUri(uri);
-                    poemEditText.setText(originalPoem);
-                    currentPoemState = originalPoem; // Сохраняем как текущее состояние
-                    originalWords = getWordsFromPoem(originalPoem); // Парсим слова для скрытия
-                    resetTimerAndPoemState(); // Сбрасываем таймер и процент скрытия при загрузке нового стиха
-                    Toast.makeText(this, "Стих успешно загружен!", Toast.LENGTH_SHORT).show();
-                } catch (IOException e) {
-                    Toast.makeText(this, "Ошибка при чтении файла: " + e.getMessage(), Toast.LENGTH_LONG).show();
-                }
+        nextStageButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                goToNextStageManually();
             }
-        }
-    }
+        });
 
-    // Чтение текста из Uri
-    private String readTextFromUri(Uri uri) throws IOException {
-        StringBuilder stringBuilder = new StringBuilder();
-        try (InputStream inputStream = getContentResolver().openInputStream(uri);
-             BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, "UTF-8"))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                stringBuilder.append(line).append("\n");
+        saveButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                openSaveFilePicker();
             }
-        }
-        return stringBuilder.toString();
-    }
+        });
 
-    // Метод для сохранения стиха (простая реализация: сохранение в переменную)
-    // Для рельного сохранения в файл потребуется DocumentFile API или Storage Access Framework
-    private void savePoemToFile() {
-        if (originalPoem.isEmpty()) {
-            Toast.makeText(this, "Нет стиха для сохранения.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        // В данном примере, "сохранение" означает, что мы сохраняем текущий оригинальный стих
-        // в переменной originalPoem, который может быть загружен или изменен.
-        // Реальное сохранение на устройство потребует более сложной логики с использованием
-        // DocumentFile API или Storage Access Framework для выбора места сохранения.
-        // Для демонстрации, просто подтвердим, что текст сохранен в памяти.
-
-        // Чтобы реализовать реальное сохранение файла:
-        // 1. Требуется использовать ACTION_CREATE_DOCUMENT Intent
-        // 2. Использовать DocumentFile API для работы с созданными файлами.
-        // Это выходит за рамки простого примера, поэтому пока ограничимся сохранением в память.
-
-        Toast.makeText(this, "Стих сохранен (в памяти приложения).", Toast.LENGTH_SHORT).show();
-    }
-
-    // Запуск или возобновление таймера
-    private void startTimer() {
-        if (startTime == 0L) { // Если это первый запуск
-            timeInMilliseconds = 0L;
-        }
-        startTime = SystemClock.uptimeMillis() - timeInMilliseconds;
-        handler.postDelayed(updateTimerThread, 0); // Запускаем обновление сразу
-        isTimerRunning = true;
-        // Запускаем скрытие слов через определенный интервал
-        handler.postDelayed(hideWordsRunnable, getIntervalToHideWords());
-    }
-
-    // Остановка таймера
-    private void stopTimer() {
-        handler.removeCallbacks(updateTimerThread);
-        handler.removeCallbacks(hideWordsRunnable); // Останавливаем и скрытие слов
-        isTimerRunning = false;
-        hasRunForTestInterval = false; // Сбрасываем флаг при остановке
-    }
-
-    // Обновление текста таймера
-    private void updateTimerTextView() {
-        minutes = (int) (timeInMilliseconds / 1000) / 60;
-        seconds = (int) (timeInMilliseconds / 1000) % 60;
-        milliseconds = (int) (timeInMilliseconds % 1000);
-        timerTextView.setText(String.format(Locale.getDefault(), "Таймер: %02d:%02d", minutes, seconds));
-    }
-
-    // Runnable для обновления таймера
-    private Runnable updateTimerThread = new Runnable() {
-        public void run() {
-            timeInMilliseconds = SystemClock.uptimeMillis() - startTime;
-            updatedTime = timeInMilliseconds;
-            updateTimerTextView();
-            if (isTimerRunning) {
-                handler.postDelayed(this, 0); // Повторяем каждые 0 мс для максимальной точности
+        checkButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                showCheckResult();
             }
-        }
-    };
+        });
 
-    // Runnable для скрытия слов
-    private Runnable hideWordsRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (isTimerRunning && !originalPoem.isEmpty()) {
-                hideRandomWords();
-                // Рассчитываем следующий интервал
-                handler.postDelayed(this, getIntervalToHideWords());
-            }
-        }
-    };
+        updateTimerAndScoreText();
 
-    // Получение интервала для скрытия слов (тестовый или реальный)
-    private long getIntervalToHideWords() {
-        // Если у нас есть оригинальные слова и они не скрыты полностью,
-        // и мы уже запускали скрытие для теста, используем реальный интервал.
-        // Иначе (если это первый запуск или есть условие для теста), используем тестовый.
-        if (originalWords.size() > 0 && currentHidePercentage < 1.0f && hasRunForTestInterval) {
-            return TEXT_TO_HIDE_INTERVAL_MS;
-        } else {
-            hasRunForTestInterval = true; // Устанавливаем флаг, что мы запустили тестовый интервал
-            return TEST_INTERVAL_MS;
-        }
-    }
-
-    // Скрывает случайные слова в тексте
-    private void hideRandomWords() {
-        if (originalWords.isEmpty()) return;
-
-        // Рассчитываем, сколько слов нужно скрыть на данном шаге
-        int totalWords = originalWords.size();
-        int wordsToCurrentlyHide = (int) (totalWords * currentHidePercentage);
-
-        // Увеличиваем количество скрываемых слов, если есть новые слова для скрытия
-        if (wordsToCurrentlyHide > wordsToHideCount) {
-            wordsToHideCount = wordsToCurrentlyHide;
-        }
-
-        // Гарантируем, что мы не скрываем больше слов, чем есть
-        wordsToHideCount = Math.min(wordsToHideCount, totalWords);
-
-        // Получаем текущий текст из EditText
-        String currentText = poemEditText.getText().toString();
-        String[] currentWords = currentText.split("\\s+"); // Разделяем по пробелам
-
-        List<Integer> wordIndicesToHide = new ArrayList<>();
-        Random random = new Random();
-
-        // Находим индексы слов, которые еще не скрыты
-        List<Integer> availableIndices = new ArrayList<>();
-        for (int i = 0; i < currentWords.length; i++) {
-            // Проверяем, не является ли слово уже скрыто (т.е. состоит из ____)
-            if (!currentWords[i].equals("____")) {
-                availableIndices.add(i);
-            }
-        }
-        Collections.shuffle(availableIndices, random); // Перемешиваем, чтобы выбрать случайные
-
-        // Выбираем индексы для скрытия
-        int count = 0;
-        for (int index : availableIndices) {
-            if (count < (wordsToHideCount - countWordsAlreadyHidden(currentText)) && index < currentWords.length) {
-                wordIndicesToHide.add(index);
-                count++;
-            } else if (count >= (wordsToHideCount - countWordsAlreadyHidden(currentText))) {
-                break;
-            }
-        }
-
-        // Формируем новый текст с замененными словами
-        StringBuilder sb = new StringBuilder();
-        int wordIndex = 0;
-        for (String word : currentWords) {
-            if (wordIndicesToHide.contains(wordIndex)) {
-                sb.append("____"); // Заменяем слово
-            } else {
-                sb.append(word);
-            }
-            sb.append(" "); // Добавляем пробел после каждого слова
-            wordIndex++;
-        }
-
-        // Устанавливаем новый текст в EditText.
-        // Важно: сохраняем позицию курсора, если она есть.
-        int selectionStart = poemEditText.getSelectionStart();
-        poemEditText.setText(sb.toString().trim()); // trim() для удаления последнего пробела
-        // Восстанавливаем позицию курсора
-        if (selectionStart != -1) {
-            poemEditText.setSelection(Math.min(selectionStart, poemEditText.getText().length()));
-        }
-
-        // Увеличиваем процент скрытия для следующего шага
-        currentHidePercentage += HIDE_PERCENTAGE_INCREASE;
-        // Гарантируем, что процент не превысит 1.0 (100%)
-        currentHidePercentage = Math.min(currentHidePercentage, 1.0f);
-    }
-
-    // Вспомогательный метод для подсчета уже скрытых слов (____)
-    private int countWordsAlreadyHidden(String text) {
-        int count = 0;
-        String[] words = text.split("\\s+");
-        for (String word : words) {
-            if (word.equals("____")) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-
-    // Парсит текст стиха на слова
-    private List<String> getWordsFromPoem(String poem) {
-        List<String> words = new ArrayList<>();
-        // Разделяем по пробелам, знакам препинания и переводам строк
-        String[] splitWords = poem.replaceAll("[^a-zA-Zа-яА-ЯёЁ\\s]", "").toLowerCase().split("\\s+");
-        for (String word : splitWords) {
-            if (!word.trim().isEmpty()) {
-                words.add(word.trim());
-            }
-        }
-        return words;
-    }
-
-    // Метод для сброса таймера и состояния стихотворения
-    private void resetTimerAndPoemState() {
-        stopTimer();
-        timeInMilliseconds = 0L;
-        startTime = 0L;
-        updateTimerTextView();
-        currentHidePercentage = INITIAL_HIDE_PERCENTAGE; // Сбросить процент скрытия
-        wordsToHideCount = 0; // Сбросить счетчик скрытых слов
-        hasRunForTestInterval = false; // Сбросить флаг тестового интервала
-    }
-
-    // Логика проверки стихотворения
-    private void checkPoem() {
-        stopTimer(); // Останавливаем таймер при проверке
-
-        if (originalPoem.isEmpty()) {
-            Toast.makeText(this, "Сначала загрузите или введите стих.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        String typedPoem = poemEditText.getText().toString();
-
-        // Очищаем проверяемый текст от лишних пробелов и приводим к одному регистру
-        String cleanedTypedPoem = typedPoem.replaceAll("\\s+", " ").trim();
-        String cleanedOriginalPoem = originalPoem.replaceAll("\\s+", " ").trim();
-
-        double score = calculateScore(cleanedOriginalPoem, cleanedTypedPoem);
-
-        showResultDialog(score);
-    }
-
-    // Расчет балла (0-100)
-    private double calculateScore(String original, String typed) {
-        List<String> originalWordsList = getWordsFromPoem(original);
-        List<String> typedWordsList = getWordsFromPoem(typed);
-
-        int correctWords = 0;
-        int totalWords = originalWordsList.size();
-
-        if (totalWords == 0) return 0.0;
-
-        // Простой подсчет совпавших слов
-        for (String originalWord : originalWordsList) {
-            boolean found = false;
-            for (String typedWord : typedWordsList) {
-                if (originalWord.equalsIgnoreCase(typedWord)) {
-                    correctWords++;
-                    typedWordsList.remove(typedWord); // Удаляем, чтобы избежать повторного подсчета
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        // Процент правильных слов
-        return (double) correctWords / totalWords * 100.0;
-    }
-
-    // Показ AlertDialog с результатом
-    private void showResultDialog(double score) {
-        String formattedTime = String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds);
-
-        String message = String.format(Locale.getDefault(),
-                "Время: %s\nСчет: %.2f%%",
-                formattedTime, score);
-
-        new AlertDialog.Builder(this)
-                .setTitle("Результат проверки")
-                .setMessage(message)
-                .setPositiveButton("OK", new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        dialog.dismiss();
-                        // Можно добавить логику для повторного старта, если нужно
-                        // resetTimerAndPoemState();
-                        // poemEditText.setText(""); // Очистить поле для нового стиха
-                    }
-                })
-                .setIcon(android.R.drawable.ic_dialog_info)
-                .show();
-    }
-
-    // Сохранение состояния при повороте экрана или сворачивании
-    @Override
-    protected void onSaveInstanceState(Bundle outState) {
-        super.onSaveInstanceState(outState);
-        outState.putString(KEY_ORIGINAL_POEM, originalPoem);
-        outState.putString(KEY_CURRENT_POEM_STATE, poemEditText.getText().toString());
-        outState.putLong(KEY_START_TIME, startTime);
-        outState.putLong(KEY_TIME_IN_MILLISECONDS, timeInMilliseconds);
-        outState.putBoolean(KEY_TIMER_RUNNING, isTimerRunning);
-        outState.putFloat(KEY_CURRENT_HIDE_PERCENTAGE, currentHidePercentage);
-        outState.putStringArrayList(KEY_ORIGINAL_WORDS, new ArrayList<>(originalWords)); // Сохраняем список слов
-        outState.putBoolean(KEY_HAS_RUN_FOR_TEST, hasRunForTestInterval);
-    }
-
-    // ** Важно: onRestoreInstanceState уже вызывается автоматически,
-    // если вы сохранили данные в onSaveInstanceState.
-    // Нет необходимости вручную переименовывать его в onRestoreInstanceState.
-    // Если вы хотите явно управлять процессом, можете использовать:
-    // @Override
-    // public void onRestoreInstanceState(Bundle savedInstanceState) {
-    //     super.onRestoreInstanceState(savedInstanceState);
-    //     // Восстановление элементов жизненного цикла, если необходимо
-    //     // Текущий код восстановления уже находится в onCreate, что является стандартной практикой.
-    // }
-
-    // Обработка жизненного цикла Activity
-    @Override
-    protected void onPause() {
-        super.onPause();
-        if (isTimerRunning) {
-            // При сворачивании приложения, таймер и скрытие слов должны продолжать работать
-            // или как минимум сохраняться. Если мы останавливаем здесь, то onResume должен его возобновить.
-            // Для простоты, давайте остановим и сохраним состояние.
-            timeSwapBuff = timeInMilliseconds; // Сохраняем текущее время
-            handler.removeCallbacks(updateTimerThread);
-            handler.removeCallbacks(hideWordsRunnable);
-            // isTimerRunning = false; // Не устанавливаем в false, чтобы знать, что нужно возобновить
+        if (savedInstanceState == null) {
+            poemEditText.setText("Вставьте ссылку на стих с ilibrary.ru или culture.ru и нажмите «Загрузить стих».");
         }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        if (isTimerRunning) {
-            // Возобновляем таймер
-            startTime = SystemClock.uptimeMillis() - timeSwapBuff;
-            handler.postDelayed(updateTimerThread, 0);
-            // Возобновляем скрытие слов
-            handler.postDelayed(hideWordsRunnable, getIntervalToHideWords());
+
+        if (sessionActive) {
+            lastResumeRealtimeMs = SystemClock.elapsedRealtime();
+            startTimer();
         }
     }
 
     @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        // Очищаем callback'и, чтобы избежать утечек памяти
-        handler.removeCallbacks(updateTimerThread);
-        handler.removeCallbacks(hideWordsRunnable);
+    protected void onPause() {
+        super.onPause();
+
+        if (sessionActive) {
+            elapsedBeforeResumeMs = getCurrentElapsedMs();
+        }
+
+        lastResumeRealtimeMs = 0L;
+        stopTimer();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        cacheAnswersFromCurrentText();
+
+        outState.putString("url", urlEditText.getText().toString());
+        outState.putString("originalText", originalText);
+        outState.putString("currentText", poemEditText.getText().toString());
+
+        outState.putStringArrayList("originalWords", originalWords);
+        outState.putIntegerArrayList("hideOrder", hideOrder);
+        outState.putIntegerArrayList("hiddenWordIndexes", new ArrayList<>(hiddenWordIndexes));
+
+        outState.putInt("hideStep", hideStep);
+        outState.putBoolean("sessionActive", sessionActive);
+        outState.putLong("elapsedBeforeResumeMs", getCurrentElapsedMs());
+        outState.putLong("nextHideAtElapsedMs", nextHideAtElapsedMs);
+
+        outState.putInt("urlPanelVisibility", urlPanel.getVisibility());
+
+        Bundle answersBundle = new Bundle();
+
+        for (Map.Entry<Integer, String> entry : savedAnswers.entrySet()) {
+            answersBundle.putString(String.valueOf(entry.getKey()), entry.getValue());
+        }
+
+        outState.putBundle("savedAnswers", answersBundle);
+
+        super.onSaveInstanceState(outState);
+    }
+
+    @Override
+    protected void onRestoreInstanceState(Bundle savedInstanceState) {
+        super.onRestoreInstanceState(savedInstanceState);
+
+        urlEditText.setText(savedInstanceState.getString("url", ""));
+
+        originalText = savedInstanceState.getString("originalText", "");
+        String currentText = savedInstanceState.getString("currentText", "");
+
+        originalWords = savedInstanceState.getStringArrayList("originalWords");
+        if (originalWords == null) {
+            originalWords = new ArrayList<>();
+        }
+
+        hideOrder = savedInstanceState.getIntegerArrayList("hideOrder");
+        if (hideOrder == null) {
+            hideOrder = new ArrayList<>();
+        }
+
+        ArrayList<Integer> restoredHidden = savedInstanceState.getIntegerArrayList("hiddenWordIndexes");
+        hiddenWordIndexes.clear();
+
+        if (restoredHidden != null) {
+            hiddenWordIndexes.addAll(restoredHidden);
+        }
+
+        savedAnswers.clear();
+
+        Bundle answersBundle = savedInstanceState.getBundle("savedAnswers");
+
+        if (answersBundle != null) {
+            for (String key : answersBundle.keySet()) {
+                try {
+                    int index = Integer.parseInt(key);
+                    savedAnswers.put(index, answersBundle.getString(key, ""));
+                } catch (NumberFormatException ignored) {
+                    // Пропускаем повреждённый ключ.
+                }
+            }
+        }
+
+        hideStep = savedInstanceState.getInt("hideStep", 0);
+        sessionActive = savedInstanceState.getBoolean("sessionActive", false);
+        elapsedBeforeResumeMs = savedInstanceState.getLong("elapsedBeforeResumeMs", 0L);
+        nextHideAtElapsedMs = savedInstanceState.getLong("nextHideAtElapsedMs", INTERVAL);
+
+        int urlPanelVisibility = savedInstanceState.getInt("urlPanelVisibility", View.VISIBLE);
+        urlPanel.setVisibility(urlPanelVisibility);
+
+        tokens = tokenize(originalText);
+        poemEditText.setText(currentText);
+
+        boolean hasPoem = !originalText.trim().isEmpty();
+
+        nextStageButton.setEnabled(hasPoem && !isFinalStageReached());
+        saveButton.setEnabled(hasPoem);
+        checkButton.setEnabled(hasPoem);
+
+        if (sessionActive) {
+            lastResumeRealtimeMs = SystemClock.elapsedRealtime();
+            startTimer();
+        }
+
+        updateTimerAndScoreText();
+    }
+
+    private boolean isSupportedPoemUrl(String url) {
+        return isILibraryUrl(url) || isCulturePoemUrl(url);
+    }
+
+    private boolean isILibraryUrl(String url) {
+        String lower = url.toLowerCase(Locale.ROOT);
+
+        return lower.startsWith("https://ilibrary.ru/")
+                || lower.startsWith("http://ilibrary.ru/")
+                || lower.startsWith("https://www.ilibrary.ru/")
+                || lower.startsWith("http://www.ilibrary.ru/");
+    }
+
+    private boolean isCulturePoemUrl(String url) {
+        String lower = url.toLowerCase(Locale.ROOT);
+
+        return lower.startsWith("https://culture.ru/poems/")
+                || lower.startsWith("http://culture.ru/poems/")
+                || lower.startsWith("https://www.culture.ru/poems/")
+                || lower.startsWith("http://www.culture.ru/poems/");
+    }
+
+    private void downloadPoemFromInternet(final String urlText) {
+        Toast.makeText(this, "Загружаю стих...", Toast.LENGTH_SHORT).show();
+
+        loadInternetButton.setEnabled(false);
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    URL url = new URL(urlText);
+                    HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+
+                    connection.setRequestMethod("GET");
+                    connection.setConnectTimeout(10000);
+                    connection.setReadTimeout(15000);
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 PoemMemorizerApp");
+
+                    int responseCode = connection.getResponseCode();
+
+                    if (responseCode < 200 || responseCode >= 300) {
+                        throw new Exception("Сервер вернул код: " + responseCode);
+                    }
+
+                    Charset charset = detectCharset(connection.getContentType(), urlText);
+
+                    InputStream inputStream = connection.getInputStream();
+                    String html = readAllText(inputStream, charset);
+
+                    connection.disconnect();
+
+                    String poemText = extractPoemFromSupportedSite(urlText, html);
+                    final String finalText = poemText.trim();
+
+                    if (finalText.isEmpty()) {
+                        throw new Exception("Не удалось найти текст стихотворения на странице.");
+                    }
+
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            loadInternetButton.setEnabled(true);
+                            startNewSession(finalText);
+                        }
+                    });
+
+                } catch (final Exception e) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            loadInternetButton.setEnabled(true);
+
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    "Ошибка загрузки: " + e.getMessage(),
+                                    Toast.LENGTH_LONG
+                            ).show();
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private static Charset detectCharset(String contentType, String urlText) {
+        if (contentType != null) {
+            Matcher matcher = Pattern.compile("charset=([^;]+)", Pattern.CASE_INSENSITIVE)
+                    .matcher(contentType);
+
+            if (matcher.find()) {
+                try {
+                    return Charset.forName(matcher.group(1).trim());
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        if (urlText.toLowerCase(Locale.ROOT).contains("ilibrary.ru")) {
+            try {
+                return Charset.forName("windows-1251");
+            } catch (Exception ignored) {
+                return StandardCharsets.UTF_8;
+            }
+        }
+
+        return StandardCharsets.UTF_8;
+    }
+
+    private static String readAllText(InputStream inputStream, Charset charset) throws Exception {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, charset));
+
+        StringBuilder builder = new StringBuilder();
+        String line;
+
+        while ((line = reader.readLine()) != null) {
+            builder.append(line).append('\n');
+        }
+
+        reader.close();
+        return builder.toString();
+    }
+
+    private static String extractPoemFromSupportedSite(String urlText, String html) {
+        String lower = urlText.toLowerCase(Locale.ROOT);
+
+        if (lower.contains("culture.ru/poems/")) {
+            return extractPoemFromCultureHtml(html);
+        }
+
+        return extractPoemFromILibraryHtml(html);
+    }
+
+    private static String extractPoemFromILibraryHtml(String html) {
+        if (html == null) {
+            return "";
+        }
+
+        StringBuilder poemBuilder = new StringBuilder();
+
+        Pattern spanPattern = Pattern.compile(
+                "(?is)<span\\s+[^>]*class\\s*=\\s*[\"']?p[\"']?[^>]*>(.*?)</span>"
+        );
+
+        Matcher matcher = spanPattern.matcher(html);
+
+        while (matcher.find()) {
+            String part = matcher.group(1);
+            part = htmlToPlainText(part).trim();
+
+            if (!part.isEmpty()) {
+                poemBuilder.append(part).append('\n');
+            }
+        }
+
+        String poem = poemBuilder.toString().trim();
+
+        if (!poem.isEmpty()) {
+            return cutAfterStopMarker(poem);
+        }
+
+        return cutAfterStopMarker(htmlToPlainText(html).trim());
+    }
+
+    private static String extractPoemFromCultureHtml(String html) {
+        if (html == null) {
+            return "";
+        }
+
+        String plain = htmlToPlainText(html);
+        plain = plain.replace('\u00A0', ' ');
+
+        plain = cutAfterAnyMarker(
+                plain,
+                new String[]{
+                        "Следующий стих",
+                        "Предыдущий стих",
+                        "Другие стихи этого автора",
+                        "Стихи других авторов",
+                        "Подборка стихотворений",
+                        "Статьи и новости",
+                        "Биографии",
+                        "Комментарии"
+                }
+        );
+
+        plain = cutAfterStopMarker(plain);
+
+        ArrayList<String> lines = new ArrayList<>();
+        String[] rawLines = plain.split("\\n");
+
+        for (String rawLine : rawLines) {
+            String line = rawLine.trim();
+
+            if (line.isEmpty()) {
+                continue;
+            }
+
+            if (isCultureJunkLine(line)) {
+                continue;
+            }
+
+            lines.add(line);
+        }
+
+        if (lines.isEmpty()) {
+            return "";
+        }
+
+        int start = 0;
+
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+
+            if (line.equalsIgnoreCase("Каталог стихотворений")) {
+                start = i + 1;
+            }
+
+            if (line.endsWith("— стихи") || line.endsWith("- стихи")) {
+                start = i + 1;
+            }
+        }
+
+        while (start < lines.size() && isCultureJunkLine(lines.get(start))) {
+            start++;
+        }
+        if (lines.size() - start >= 3) {
+            start += 2;
+        }
+
+        StringBuilder poemBuilder = new StringBuilder();
+
+        for (int i = start; i < lines.size(); i++) {
+            String line = lines.get(i).trim();
+
+            if (line.isEmpty()) {
+                continue;
+            }
+
+            poemBuilder.append(line).append('\n');
+        }
+
+        return poemBuilder.toString().trim();
+    }
+
+    private static boolean isCultureJunkLine(String line) {
+        String lower = line.toLowerCase(Locale.ROOT);
+
+        return lower.equals("литература")
+                || lower.equals("каталог стихотворений")
+                || lower.equals("image")
+                || lower.startsWith("image:")
+                || lower.startsWith("top.mail.ru")
+                || lower.equals("афиша")
+                || lower.equals("live")
+                || lower.equals("спецпроекты")
+                || lower.equals("кино")
+                || lower.equals("музеи")
+                || lower.equals("музыка")
+                || lower.equals("театр")
+                || lower.equals("традиции")
+                || lower.equals("архитектура")
+                || lower.equals("образование")
+                || lower.equals("о проекте")
+                || lower.equals("открытые данные")
+                || lower.startsWith("©")
+                || lower.contains("культура.рф")
+                || lower.contains("при цитировании")
+                || lower.contains("нашли опечатку")
+                || lower.contains("войдите")
+                || lower.contains("зарегистрируйтесь");
+    }
+
+    private static String cutAfterAnyMarker(String text, String[] markers) {
+        if (text == null) {
+            return "";
+        }
+
+        int bestIndex = -1;
+
+        for (String marker : markers) {
+            int index = text.indexOf(marker);
+
+            if (index >= 0 && (bestIndex < 0 || index < bestIndex)) {
+                bestIndex = index;
+            }
+        }
+
+        if (bestIndex >= 0) {
+            return text.substring(0, bestIndex).trim();
+        }
+
+        return text.trim();
+    }
+
+    private static String cutAfterStopMarker(String text) {
+        if (text == null) {
+            return "";
+        }
+
+        int markerIndex = text.indexOf('✦');
+
+        if (markerIndex >= 0) {
+            return text.substring(0, markerIndex).trim();
+        }
+
+        return text.trim();
+    }
+
+    private static String htmlToPlainText(String html) {
+        String result = html;
+
+        result = result.replaceAll("(?is)<script.*?>.*?</script>", " ");
+        result = result.replaceAll("(?is)<style.*?>.*?</style>", " ");
+
+        result = result.replaceAll("(?i)<br\\s*/?>", "\n");
+        result = result.replaceAll("(?i)</p>", "\n");
+        result = result.replaceAll("(?i)</div>", "\n");
+        result = result.replaceAll("(?i)</span>", "\n");
+        result = result.replaceAll("(?i)</li>", "\n");
+
+        result = result.replaceAll("(?is)<[^>]+>", " ");
+
+        result = decodeHtmlEntities(result);
+
+        result = result.replaceAll("[ \\t\\x0B\\f\\r]+", " ");
+        result = result.replaceAll(" *\\n *", "\n");
+        result = result.replaceAll("\\n{3,}", "\n\n");
+
+        return result.trim();
+    }
+
+    private static String decodeHtmlEntities(String text) {
+        String result = text;
+
+        result = result.replace("&nbsp;", " ");
+        result = result.replace("&quot;", "\"");
+        result = result.replace("&apos;", "'");
+        result = result.replace("&lt;", "<");
+        result = result.replace("&gt;", ">");
+        result = result.replace("&amp;", "&");
+        result = result.replace("&mdash;", "—");
+        result = result.replace("&ndash;", "–");
+        result = result.replace("&laquo;", "«");
+        result = result.replace("&raquo;", "»");
+        result = result.replace("&hellip;", "…");
+
+        Pattern numericEntity = Pattern.compile("&#(\\d+);");
+        Matcher matcher = numericEntity.matcher(result);
+        StringBuffer buffer = new StringBuffer();
+
+        while (matcher.find()) {
+            try {
+                int code = Integer.parseInt(matcher.group(1));
+                matcher.appendReplacement(buffer, Matcher.quoteReplacement(String.valueOf((char) code)));
+            } catch (Exception e) {
+                matcher.appendReplacement(buffer, Matcher.quoteReplacement(matcher.group()));
+            }
+        }
+
+        matcher.appendTail(buffer);
+        result = buffer.toString();
+
+        Pattern hexEntity = Pattern.compile("&#x([0-9a-fA-F]+);");
+        matcher = hexEntity.matcher(result);
+        buffer = new StringBuffer();
+
+        while (matcher.find()) {
+            try {
+                int code = Integer.parseInt(matcher.group(1), 16);
+                matcher.appendReplacement(buffer, Matcher.quoteReplacement(String.valueOf((char) code)));
+            } catch (Exception e) {
+                matcher.appendReplacement(buffer, Matcher.quoteReplacement(matcher.group()));
+            }
+        }
+
+        matcher.appendTail(buffer);
+        return buffer.toString();
+    }
+
+    private void startNewSession(String text) {
+        stopTimer();
+
+        originalText = text;
+        tokens = tokenize(originalText);
+        originalWords = extractWords(tokens);
+
+        if (originalWords.isEmpty()) {
+            Toast.makeText(this, "В загруженном тексте не найдено слов.", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        hiddenWordIndexes.clear();
+        savedAnswers.clear();
+
+        hideOrder.clear();
+
+        for (int i = 0; i < originalWords.size(); i++) {
+            hideOrder.add(i);
+        }
+
+        Collections.shuffle(hideOrder, new Random());
+
+        hideStep = 0;
+        sessionActive = true;
+
+        elapsedBeforeResumeMs = 0L;
+        lastResumeRealtimeMs = SystemClock.elapsedRealtime();
+        nextHideAtElapsedMs = INTERVAL;
+
+        poemEditText.setText(originalText);
+
+        urlPanel.setVisibility(View.GONE);
+
+        nextStageButton.setEnabled(true);
+        saveButton.setEnabled(true);
+        checkButton.setEnabled(true);
+
+        startTimer();
+        updateTimerAndScoreText();
+
+        Toast.makeText(this, "Стих загружен.", Toast.LENGTH_LONG).show();
+    }
+
+    private void goToNextStageManually() {
+        if (!sessionActive || originalWords.isEmpty()) {
+            Toast.makeText(this, "Сначала загрузите стих.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        requestNextStageWithValidation();
+    }
+
+    private void requestNextStageWithValidation() {
+        if (hiddenWordIndexes.isEmpty()) {
+            advanceHidingStage();
+            nextHideAtElapsedMs = getCurrentElapsedMs() + INTERVAL;
+            return;
+        }
+
+        if (isFinalStageReached()) {
+            showCheckResult();
+            return;
+        }
+
+        cacheAnswersFromCurrentText();
+
+        StageCheckResult result = checkCurrentStage();
+
+        if (result.missing == 0 && result.errors == 0) {
+            advanceHidingStage();
+            nextHideAtElapsedMs = getCurrentElapsedMs() + INTERVAL;
+            return;
+        }
+
+        showStageNotCompletedDialog(result);
+    }
+
+    private void handleAutomaticStageChange() {
+        if (!sessionActive || originalWords.isEmpty()) {
+            return;
+        }
+
+        if (isFinalStageReached()) {
+            return;
+        }
+
+        if (hiddenWordIndexes.isEmpty()) {
+            advanceHidingStage();
+            return;
+        }
+
+        cacheAnswersFromCurrentText();
+
+        StageCheckResult result = checkCurrentStage();
+
+        if (result.missing == 0 && result.errors == 0) {
+            advanceHidingStage();
+        } else {
+            Toast.makeText(
+                    MainActivity.this,
+                    "Этап не завершён: есть пустые поля или ошибки.",
+                    Toast.LENGTH_SHORT
+            ).show();
+        }
+    }
+
+    private void showStageNotCompletedDialog(StageCheckResult result) {
+        String message =
+                "Этот этап ещё не пройден полностью.\n\n" +
+                        "Правильно: " + result.correct + " из " + result.total + "\n" +
+                        "Не заполнено: " + result.missing + "\n" +
+                        "Ошибок: " + result.errors + "\n\n" +
+                        "Что сделать?";
+
+        new AlertDialog.Builder(this)
+                .setTitle("Этап не завершён")
+                .setMessage(message)
+                .setPositiveButton("Пройти этап ещё раз", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        repeatCurrentStage();
+                    }
+                })
+                .setNegativeButton("Вернуться к исходному стиху", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        resetToOriginalPoem();
+                    }
+                })
+                .setNeutralButton("Остаться здесь", null)
+                .show();
+    }
+
+    private StageCheckResult checkCurrentStage() {
+        ArrayList<String> currentUnits = extractWordsAndBlanks(poemEditText.getText().toString());
+
+        int total = hiddenWordIndexes.size();
+        int correct = 0;
+        int missing = 0;
+        int errors = 0;
+
+        for (Integer hiddenIndex : hiddenWordIndexes) {
+            if (hiddenIndex < 0 || hiddenIndex >= originalWords.size()) {
+                errors++;
+                continue;
+            }
+
+            if (hiddenIndex >= currentUnits.size()) {
+                missing++;
+                continue;
+            }
+
+            String actualRaw = currentUnits.get(hiddenIndex).trim();
+            String expectedRaw = originalWords.get(hiddenIndex);
+
+            if (actualRaw.isEmpty() || isBlankPlaceholder(actualRaw)) {
+                missing++;
+                continue;
+            }
+
+            if (normalize(actualRaw).equals(normalize(expectedRaw))) {
+                correct++;
+            } else {
+                errors++;
+            }
+        }
+
+        return new StageCheckResult(total, correct, missing, errors);
+    }
+
+    private void repeatCurrentStage() {
+        ArrayList<String> currentUnits = extractWordsAndBlanks(poemEditText.getText().toString());
+
+        for (Integer hiddenIndex : hiddenWordIndexes) {
+            if (hiddenIndex < 0 || hiddenIndex >= originalWords.size()) {
+                savedAnswers.remove(hiddenIndex);
+                continue;
+            }
+
+            if (hiddenIndex >= currentUnits.size()) {
+                savedAnswers.remove(hiddenIndex);
+                continue;
+            }
+
+            String actualRaw = currentUnits.get(hiddenIndex).trim();
+            String expectedRaw = originalWords.get(hiddenIndex);
+
+            if (!actualRaw.isEmpty()
+                    && !isBlankPlaceholder(actualRaw)
+                    && normalize(actualRaw).equals(normalize(expectedRaw))) {
+                savedAnswers.put(hiddenIndex, actualRaw);
+            } else {
+                savedAnswers.remove(hiddenIndex);
+            }
+        }
+
+        poemEditText.setText(buildMaskedText());
+        nextHideAtElapsedMs = getCurrentElapsedMs() + INTERVAL;
+
+        Toast.makeText(this, "Повторите этот этап.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void resetToOriginalPoem() {
+        hiddenWordIndexes.clear();
+        savedAnswers.clear();
+
+        hideStep = 0;
+
+        poemEditText.setText(originalText);
+
+        nextStageButton.setEnabled(true);
+        nextHideAtElapsedMs = getCurrentElapsedMs() + INTERVAL;
+
+        updateTimerAndScoreText();
+
+        Toast.makeText(this, "Возврат к исходному стихотворению.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void advanceHidingStage() {
+        if (originalWords.isEmpty()) {
+            return;
+        }
+
+        cacheAnswersFromCurrentText();
+
+        double targetPercent = Math.min(1.0, 0.10 + hideStep * 0.15);
+        int targetHiddenCount = (int) Math.ceil(originalWords.size() * targetPercent);
+
+        hiddenWordIndexes.clear();
+
+        for (int i = 0; i < targetHiddenCount && i < hideOrder.size(); i++) {
+            hiddenWordIndexes.add(hideOrder.get(i));
+        }
+
+        hideStep++;
+
+        poemEditText.setText(buildMaskedText());
+        updateTimerAndScoreText();
+
+        if (targetPercent >= 1.0) {
+            nextStageButton.setEnabled(false);
+            Toast.makeText(this, "Финальный этап: скрыты все слова.", Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(
+                    this,
+                    "Скрыто примерно " + Math.round(targetPercent * 100) + "% слов.",
+                    Toast.LENGTH_SHORT
+            ).show();
+        }
+    }
+
+    private boolean isFinalStageReached() {
+        return !originalWords.isEmpty()
+                && !hiddenWordIndexes.isEmpty()
+                && hiddenWordIndexes.size() >= originalWords.size();
+    }
+
+    private String buildMaskedText() {
+        StringBuilder builder = new StringBuilder();
+
+        for (Token token : tokens) {
+            if (token.isWord && hiddenWordIndexes.contains(token.wordIndex)) {
+                String answer = savedAnswers.get(token.wordIndex);
+
+                if (answer != null && !answer.trim().isEmpty() && !isBlankPlaceholder(answer)) {
+                    builder.append(answer.trim());
+                } else {
+                    builder.append("____");
+                }
+            } else {
+                builder.append(token.text);
+            }
+        }
+
+        return builder.toString();
+    }
+
+    private void cacheAnswersFromCurrentText() {
+        if (originalWords.isEmpty()) {
+            return;
+        }
+
+        ArrayList<String> currentUnits = extractWordsAndBlanks(poemEditText.getText().toString());
+
+        for (Integer hiddenIndex : hiddenWordIndexes) {
+            if (hiddenIndex >= 0 && hiddenIndex < currentUnits.size()) {
+                String value = currentUnits.get(hiddenIndex).trim();
+
+                if (!value.isEmpty()) {
+                    savedAnswers.put(hiddenIndex, value);
+                }
+            }
+        }
+    }
+
+    private void showCheckResult() {
+        if (originalText.trim().isEmpty()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Нет стиха")
+                    .setMessage("Сначала загрузите стих с ilibrary.ru или culture.ru.")
+                    .setPositiveButton("ОК", null)
+                    .show();
+            return;
+        }
+
+        cacheAnswersFromCurrentText();
+
+        ScoreResult result = calculateScore();
+        long elapsed = getCurrentElapsedMs();
+
+        if (isFinalStageReached() && result.percent == 100) {
+            showFinalSuccessDialog(elapsed, result);
+            return;
+        }
+
+        String message =
+                "Потраченное время: " + formatDuration(elapsed) + "\n" +
+                        "Итоговый балл: " + result.percent + " из 100\n" +
+                        "Правильно: " + result.correct + " из " + result.total + "\n\n" +
+                        result.note;
+
+        new AlertDialog.Builder(this)
+                .setTitle("Результат проверки")
+                .setMessage(message)
+                .setPositiveButton("ОК", null)
+                .show();
+
+        updateTimerAndScoreText();
+    }
+
+    private void showFinalSuccessDialog(long elapsed, ScoreResult result) {
+        stopTimer();
+        sessionActive = false;
+
+        String message =
+                "Поздравляем! Вы выучили текст.\n\n" +
+                        "Потраченное время: " + formatDuration(elapsed) + "\n" +
+                        "Итоговый балл: " + result.percent + " из 100\n" +
+                        "Правильно: " + result.correct + " из " + result.total;
+
+        new AlertDialog.Builder(this)
+                .setTitle("Текст выучен")
+                .setMessage(message)
+                .setPositiveButton("На главный экран", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        returnToMainScreen();
+                    }
+                })
+                .setCancelable(false)
+                .show();
+    }
+
+    private void returnToMainScreen() {
+        stopTimer();
+
+        originalText = "";
+        tokens.clear();
+        originalWords.clear();
+
+        hideOrder.clear();
+        hiddenWordIndexes.clear();
+        savedAnswers.clear();
+
+        hideStep = 0;
+        sessionActive = false;
+
+        elapsedBeforeResumeMs = 0L;
+        lastResumeRealtimeMs = 0L;
+        nextHideAtElapsedMs = INTERVAL;
+
+        urlEditText.setText("");
+        poemEditText.setText("Вставьте ссылку на стих с ilibrary.ru или culture.ru и нажмите «Загрузить стих».");
+
+        urlPanel.setVisibility(View.VISIBLE);
+
+        nextStageButton.setEnabled(false);
+        saveButton.setEnabled(false);
+        checkButton.setEnabled(false);
+        loadInternetButton.setEnabled(true);
+
+        updateTimerAndScoreText();
+
+        Toast.makeText(this, "Главный экран.", Toast.LENGTH_SHORT).show();
+    }
+
+    private ScoreResult calculateScore() {
+        if (hiddenWordIndexes.isEmpty()) {
+            return new ScoreResult(0, 0, 100, "Пока нет скрытых слов. Нажмите «Следующий этап» или дождитесь таймера.");
+        }
+
+        ArrayList<String> currentUnits = extractWordsAndBlanks(poemEditText.getText().toString());
+
+        int total = hiddenWordIndexes.size();
+        int correct = 0;
+        boolean structureWarning = currentUnits.size() != originalWords.size();
+
+        for (Integer hiddenIndex : hiddenWordIndexes) {
+            if (hiddenIndex < 0 || hiddenIndex >= originalWords.size()) {
+                continue;
+            }
+
+            if (hiddenIndex >= currentUnits.size()) {
+                continue;
+            }
+
+            String expected = normalize(originalWords.get(hiddenIndex));
+            String actual = normalize(currentUnits.get(hiddenIndex));
+
+            if (!isBlankPlaceholder(actual) && actual.equals(expected)) {
+                correct++;
+            }
+        }
+
+        int percent = total == 0 ? 100 : Math.round(correct * 100f / total);
+
+        String note;
+
+        if (structureWarning) {
+            note = "Внимание: количество слов/пропусков изменилось. Лучше заменять каждый ____ ровно одним словом, не удаляя остальной текст.";
+        } else if (hiddenWordIndexes.size() == originalWords.size() && correct == total) {
+            note = "Отлично: все слова введены правильно.";
+        } else {
+            note = "Проверяются только скрытые слова. Видимые слова считаются подсказками.";
+        }
+
+        return new ScoreResult(total, correct, percent, note);
+    }
+
+    private void openSaveFilePicker() {
+        if (originalText.trim().isEmpty()) {
+            Toast.makeText(this, "Сначала загрузите стих.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        cacheAnswersFromCurrentText();
+
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("text/plain");
+        intent.putExtra(Intent.EXTRA_TITLE, "poem_progress.txt");
+
+        startActivityForResult(intent, REQUEST_SAVE_PROGRESS);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode != REQUEST_SAVE_PROGRESS) {
+            return;
+        }
+
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+
+        saveProgressToUri(data.getData());
+    }
+
+    private void saveProgressToUri(Uri uri) {
+        try {
+            OutputStream outputStream = getContentResolver().openOutputStream(uri);
+
+            if (outputStream == null) {
+                Toast.makeText(this, "Не удалось создать файл.", Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            BufferedWriter writer = new BufferedWriter(
+                    new OutputStreamWriter(outputStream, StandardCharsets.UTF_8)
+            );
+
+            ScoreResult score = calculateScore();
+
+            writer.write("Прогресс заучивания стихотворения\n");
+            writer.write("---------------------------------\n");
+            writer.write("Источник: " + urlEditText.getText().toString() + "\n");
+            writer.write("Время: " + formatDuration(getCurrentElapsedMs()) + "\n");
+            writer.write("Скрыто слов: " + hiddenWordIndexes.size() + " из " + originalWords.size() + "\n");
+            writer.write("Текущий балл: " + score.percent + " из 100\n");
+
+            writer.write("\nТекущий текст:\n");
+            writer.write(poemEditText.getText().toString());
+
+            writer.write("\n\nОригинальный текст:\n");
+            writer.write(originalText);
+            writer.write("\n");
+
+            writer.close();
+
+            Toast.makeText(this, "Прогресс сохранён.", Toast.LENGTH_LONG).show();
+
+        } catch (Exception e) {
+            Toast.makeText(this, "Ошибка сохранения: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void startTimer() {
+        handler.removeCallbacks(timerRunnable);
+        handler.post(timerRunnable);
+    }
+
+    private void stopTimer() {
+        handler.removeCallbacks(timerRunnable);
+    }
+
+    private long getCurrentElapsedMs() {
+        if (!sessionActive) {
+            return elapsedBeforeResumeMs;
+        }
+
+        if (lastResumeRealtimeMs == 0L) {
+            return elapsedBeforeResumeMs;
+        }
+
+        return elapsedBeforeResumeMs + (SystemClock.elapsedRealtime() - lastResumeRealtimeMs);
+    }
+
+    private void updateTimerAndScoreText() {
+        ScoreResult score = calculateScore();
+
+        String text =
+                "Время: " + formatDuration(getCurrentElapsedMs()) +
+                        " | Балл: " + score.percent + "/100" +
+                        " | Скрыто: " + hiddenWordIndexes.size() + "/" + originalWords.size();
+
+        timerScoreTextView.setText(text);
+    }
+
+    private static ArrayList<Token> tokenize(String text) {
+        ArrayList<Token> result = new ArrayList<>();
+
+        Pattern pattern = Pattern.compile("[\\p{L}\\p{N}]+(?:[-'’][\\p{L}\\p{N}]+)*");
+        Matcher matcher = pattern.matcher(text);
+
+        int lastEnd = 0;
+        int wordIndex = 0;
+
+        while (matcher.find()) {
+            if (matcher.start() > lastEnd) {
+                result.add(new Token(text.substring(lastEnd, matcher.start()), false, -1));
+            }
+
+            result.add(new Token(matcher.group(), true, wordIndex));
+            wordIndex++;
+
+            lastEnd = matcher.end();
+        }
+
+        if (lastEnd < text.length()) {
+            result.add(new Token(text.substring(lastEnd), false, -1));
+        }
+
+        return result;
+    }
+
+    private static ArrayList<String> extractWords(ArrayList<Token> tokens) {
+        ArrayList<String> result = new ArrayList<>();
+
+        for (Token token : tokens) {
+            if (token.isWord) {
+                result.add(token.text);
+            }
+        }
+
+        return result;
+    }
+
+    private static ArrayList<String> extractWordsAndBlanks(String text) {
+        ArrayList<String> result = new ArrayList<>();
+
+        Pattern pattern = Pattern.compile("[\\p{L}\\p{N}]+(?:[-'’][\\p{L}\\p{N}]+)*|_+");
+        Matcher matcher = pattern.matcher(text);
+
+        while (matcher.find()) {
+            result.add(matcher.group());
+        }
+
+        return result;
+    }
+
+    private static boolean isBlankPlaceholder(String value) {
+        return value != null && value.trim().matches("_+");
+    }
+
+    private static String normalize(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value
+                .trim()
+                .toLowerCase(Locale.ROOT)
+                .replace('ё', 'е');
+    }
+
+    private static String formatDuration(long millis) {
+        long totalSeconds = Math.max(0L, millis / 1000L);
+
+        long hours = totalSeconds / 3600L;
+        long minutes = (totalSeconds % 3600L) / 60L;
+        long seconds = totalSeconds % 60L;
+
+        return String.format(Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds);
+    }
+
+    private static class Token {
+        final String text;
+        final boolean isWord;
+        final int wordIndex;
+
+        Token(String text, boolean isWord, int wordIndex) {
+            this.text = text;
+            this.isWord = isWord;
+            this.wordIndex = wordIndex;
+        }
+    }
+
+    private static class ScoreResult {
+        final int total;
+        final int correct;
+        final int percent;
+        final String note;
+
+        ScoreResult(int total, int correct, int percent, String note) {
+            this.total = total;
+            this.correct = correct;
+            this.percent = percent;
+            this.note = note;
+        }
+    }
+
+    private static class StageCheckResult {
+        final int total;
+        final int correct;
+        final int missing;
+        final int errors;
+
+        StageCheckResult(int total, int correct, int missing, int errors) {
+            this.total = total;
+            this.correct = correct;
+            this.missing = missing;
+            this.errors = errors;
+        }
     }
 }

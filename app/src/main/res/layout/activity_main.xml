@@ -1,89 +1,95 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/mainRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp"
-    tools:context=".MainActivity">
+    android:padding="12dp">
 
-
-    <!-- Таймер и Счет -->
     <LinearLayout
+        android:id="@+id/urlPanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="16dp">
+        android:orientation="vertical"
+        android:paddingBottom="8dp">
 
-        <TextView
-            android:id="@+id/timerTextView"
-            android:layout_width="0dp"
+        <EditText
+            android:id="@+id/urlEditText"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Таймер: 00:00"
-            android:textSize="18sp"
-            android:textStyle="bold" />
+            android:hint="Вставьте ссылку с ilibrary.ru или culture.ru"
+            android:inputType="textUri"
+            android:singleLine="true"
+            android:textSize="15sp"
+            android:padding="8dp" />
 
-        <TextView
-            android:id="@+id/scoreTextView"
-            android:layout_width="0dp"
+        <Button
+            android:id="@+id/loadInternetButton"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Счет: 0"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:gravity="end"/>
+            android:text="Загрузить стих" />
 
     </LinearLayout>
 
-    <!-- ScrollView для текста стиха -->
-
-    <!-- Кнопка Загрузить -->
+    <TextView
+        android:id="@+id/timerScoreTextView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Время: 00:00:00 | Балл: 100/100"
+        android:textSize="16sp"
+        android:paddingBottom="8dp" />
 
     <ScrollView
-        android:layout_width="1584dp"
-        android:layout_height="1553dp"
-        android:layout_marginBottom="16dp"
+        android:id="@+id/poemScrollView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="@android:color/darker_gray"> <!-- Для наглядности, чтобы видеть границы -->
+        android:fillViewport="true">
 
-        <!-- EditText для ввода/отображения стиха -->
         <EditText
             android:id="@+id/poemEditText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="@null"
             android:gravity="top|start"
-            android:hint="Здесь будет отображаться текст стиха"
-            android:inputType="textMultiLine"
-            android:minHeight="150dp"
-            android:padding="12dp"
-            android:textSize="16sp" />
+            android:minLines="20"
+            android:textSize="18sp"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:singleLine="false"
+            android:overScrollMode="always"
+            android:background="@android:drawable/edit_text"
+            android:padding="10dp"
+            android:hint="Здесь будет стих..." />
 
     </ScrollView>
 
-    <Button
-        android:id="@+id/loadButton"
+    <LinearLayout
+        android:id="@+id/bottomButtonsLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Загрузить стих"
-        android:layout_marginBottom="8dp"/>
+        android:orientation="horizontal"
+        android:paddingTop="8dp">
 
-    <!-- Кнопка Сохранить -->
-    <Button
-        android:id="@+id/saveButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Сохранить стих"
-        android:layout_marginBottom="8dp"/>
+        <Button
+            android:id="@+id/nextStageButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Следующий этап" />
 
-    <!-- Кнопка Проверить -->
-    <Button
-        android:id="@+id/checkButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Проверить"/>
+        <Button
+            android:id="@+id/saveButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Сохранить" />
+
+        <Button
+            android:id="@+id/checkButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Проверить" />
+
+    </LinearLayout>
 
 </LinearLayout>
