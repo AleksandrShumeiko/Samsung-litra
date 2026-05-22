@@ -1,20 +1,26 @@
 package litra.mmm;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.PopupWindow;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -24,6 +30,7 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -37,29 +44,56 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
+
+    /*
+     * Интервал автоматического перехода.
+     *
+     * Сейчас стоит 5 минут:
+     * 5 * 60 * 1000L
+     *
+     * Для теста можно поставить 10 секунд:
+     * 10 * 1000L
+     */
     private static final long INTERVAL = 5 * 60 * 1000L;
+
     private static final int REQUEST_SAVE_PROGRESS = 200;
+    private static final int REQUEST_WEB_POEM = 201;
+
     private LinearLayout urlPanel;
+    private ScrollView poemScrollView;
+
     private EditText urlEditText;
     private EditText poemEditText;
     private TextView timerScoreTextView;
+
     private Button loadInternetButton;
+    private Button webSearchButton;
+    private Button searchMenuButton;
+    private Button actionsMenuButton;
     private Button nextStageButton;
     private Button saveButton;
     private Button checkButton;
 
+    private PopupWindow searchPopup;
+    private PopupWindow actionsPopup;
+
     private final Handler handler = new Handler(Looper.getMainLooper());
+
     private String originalText = "";
     private ArrayList<Token> tokens = new ArrayList<>();
     private ArrayList<String> originalWords = new ArrayList<>();
+
     private ArrayList<Integer> hideOrder = new ArrayList<>();
     private HashSet<Integer> hiddenWordIndexes = new HashSet<>();
     private HashMap<Integer, String> savedAnswers = new HashMap<>();
+
     private int hideStep = 0;
     private boolean sessionActive = false;
+
     private long elapsedBeforeResumeMs = 0L;
     private long lastResumeRealtimeMs = 0L;
     private long nextHideAtElapsedMs = INTERVAL;
+
     private final Runnable timerRunnable = new Runnable() {
         @Override
         public void run() {
@@ -79,21 +113,28 @@ public class MainActivity extends Activity {
         }
     };
 
+    @SuppressLint("MissingInflatedId")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
         urlPanel = findViewById(R.id.urlPanel);
+        poemScrollView = findViewById(R.id.poemScrollView);
 
         urlEditText = findViewById(R.id.urlEditText);
         poemEditText = findViewById(R.id.poemEditText);
         timerScoreTextView = findViewById(R.id.timerScoreTextView);
 
-        loadInternetButton = findViewById(R.id.loadInternetButton);
-        nextStageButton = findViewById(R.id.nextStageButton);
-        saveButton = findViewById(R.id.saveButton);
-        checkButton = findViewById(R.id.checkButton);
+        searchMenuButton = findViewById(R.id.searchMenuButton);
+        actionsMenuButton = findViewById(R.id.actionsMenuButton);
+
+        loadInternetButton = createActionButton("Найти по ссылке");
+        webSearchButton = createActionButton("Найти в интернете");
+
+        nextStageButton = createActionButton("Следующий этап");
+        checkButton = createActionButton("Проверить");
+        saveButton = createActionButton("Сохранить стих");
 
         nextStageButton.setEnabled(false);
         saveButton.setEnabled(false);
@@ -107,7 +148,7 @@ public class MainActivity extends Activity {
                 if (url.isEmpty()) {
                     Toast.makeText(
                             MainActivity.this,
-                            "Вставьте ссылку с ilibrary.ru или culture.ru.",
+                            "Введите прямую ссылку на стихотворение.",
                             Toast.LENGTH_SHORT
                     ).show();
                     return;
@@ -116,13 +157,31 @@ public class MainActivity extends Activity {
                 if (!isSupportedPoemUrl(url)) {
                     Toast.makeText(
                             MainActivity.this,
-                            "Нужна ссылка с ilibrary.ru или конкретная страница стихотворения с culture.ru.",
+                            "Кнопка «Найти по ссылке» работает только с прямыми ссылками ilibrary.ru или culture.ru.",
                             Toast.LENGTH_LONG
                     ).show();
                     return;
                 }
 
                 downloadPoemFromInternet(url);
+            }
+        });
+
+        webSearchButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                String query = urlEditText.getText().toString().trim();
+
+                if (query.isEmpty()) {
+                    Toast.makeText(
+                            MainActivity.this,
+                            "Введите название стихотворения для поиска в интернете.",
+                            Toast.LENGTH_SHORT
+                    ).show();
+                    return;
+                }
+
+                openWebPoemSearch(query);
             }
         });
 
@@ -147,11 +206,149 @@ public class MainActivity extends Activity {
             }
         });
 
+        searchMenuButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                showSearchPopup();
+            }
+        });
+
+        actionsMenuButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                showActionsPopup();
+            }
+        });
+
+        poemEditText.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View view, boolean hasFocus) {
+                if (hasFocus) {
+                    scrollPoemDownAfterKeyboard();
+                }
+            }
+        });
+
+        poemEditText.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                scrollPoemDownAfterKeyboard();
+            }
+        });
+
         updateTimerAndScoreText();
 
         if (savedInstanceState == null) {
-            poemEditText.setText("Вставьте ссылку на стих с ilibrary.ru или culture.ru и нажмите «Загрузить стих».");
+            poemEditText.setText(getRulesText());
         }
+    }
+
+    private String getRulesText() {
+        return "Правила:\n\n" +
+                "1. Кнопка «Найти по ссылке» работает только для прямых ссылок на стихотворение.\n\n" +
+                "2. Чтобы найти стих по названию, введите название и нажмите кнопку «Поиск» под строкой ввода, затем «Найти в интернете».\n\n" +
+                "3. Для большей точности на сайте лучше выделить только текст стихотворения, а потом нажать «Вставить текст страницы». Если ничего не выделить, приложение попробует очистить страницу автоматически.\n\n" +
+                "4. Если пишете слово, не удаляя черту _, пишите без пробелов.\n" +
+                "Правильно: _слово, слово_ или _слово_.\n" +
+                "Неправильно: _ слово, слово _ или _ слово _.\n\n" +
+                "Кнопки «Следующий этап», «Проверить» и «Сохранить стих» находятся в меню «Действия».";
+    }
+
+    private Button createActionButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextColor(Color.BLACK);
+        button.setBackgroundColor(Color.rgb(230, 201, 147));
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dpToPx(52)
+        );
+        params.setMargins(0, dpToPx(6), 0, dpToPx(6));
+        button.setLayoutParams(params);
+
+        return button;
+    }
+
+    private int dpToPx(int dp) {
+        return (int) (dp * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void showSearchPopup() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(16), dpToPx(16), dpToPx(16), dpToPx(16));
+        layout.setBackgroundColor(Color.rgb(230, 201, 147));
+
+        removeFromParent(loadInternetButton);
+        removeFromParent(webSearchButton);
+
+        layout.addView(loadInternetButton);
+        layout.addView(webSearchButton);
+
+        searchPopup = new PopupWindow(
+                layout,
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                true
+        );
+
+        searchPopup.setBackgroundDrawable(new ColorDrawable(Color.rgb(230, 201, 147)));
+        searchPopup.setOutsideTouchable(true);
+        searchPopup.setElevation(dpToPx(8));
+
+        searchPopup.showAsDropDown(searchMenuButton);
+    }
+
+    private void showActionsPopup() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(16), dpToPx(16), dpToPx(16), dpToPx(16));
+        layout.setBackgroundColor(Color.rgb(230, 201, 147));
+
+        removeFromParent(nextStageButton);
+        removeFromParent(checkButton);
+        removeFromParent(saveButton);
+
+        layout.addView(nextStageButton);
+        layout.addView(checkButton);
+        layout.addView(saveButton);
+
+        actionsPopup = new PopupWindow(
+                layout,
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                true
+        );
+
+        actionsPopup.setBackgroundDrawable(new ColorDrawable(Color.rgb(230, 201, 147)));
+        actionsPopup.setOutsideTouchable(true);
+        actionsPopup.setElevation(dpToPx(8));
+
+        actionsPopup.showAtLocation(actionsMenuButton, Gravity.BOTTOM, 0, 0);
+    }
+
+    private void removeFromParent(View view) {
+        if (view == null || view.getParent() == null) {
+            return;
+        }
+
+        if (view.getParent() instanceof LinearLayout) {
+            ((LinearLayout) view.getParent()).removeView(view);
+        }
+    }
+
+    private void scrollPoemDownAfterKeyboard() {
+        if (poemScrollView == null || poemEditText == null) {
+            return;
+        }
+
+        poemScrollView.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                poemScrollView.smoothScrollTo(0, poemEditText.getBottom());
+            }
+        }, 300);
     }
 
     @Override
@@ -272,6 +469,180 @@ public class MainActivity extends Activity {
         updateTimerAndScoreText();
     }
 
+    private void searchPoemByTitle(final String title) {
+        Toast.makeText(this, "Ищу стихотворение...", Toast.LENGTH_SHORT).show();
+        loadInternetButton.setEnabled(false);
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    SearchResult result = findPoemOnSupportedSites(title);
+
+                    if (result == null || result.text.trim().isEmpty()) {
+                        throw new Exception("Стихотворение не найдено на ilibrary.ru или culture.ru.");
+                    }
+
+                    final SearchResult finalResult = result;
+
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            loadInternetButton.setEnabled(true);
+                            urlEditText.setText(finalResult.url);
+                            startNewSession(finalResult.text);
+                        }
+                    });
+
+                } catch (final Exception e) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            loadInternetButton.setEnabled(true);
+
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    "Ошибка поиска: " + e.getMessage(),
+                                    Toast.LENGTH_LONG
+                            ).show();
+                        }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private SearchResult findPoemOnSupportedSites(String title) throws Exception {
+        SearchResult culture = searchCulture(title);
+
+        if (culture != null) {
+            return culture;
+        }
+
+        SearchResult ilibrary = searchILibrary(title);
+
+        if (ilibrary != null) {
+            return ilibrary;
+        }
+
+        return null;
+    }
+
+    private SearchResult searchCulture(String title) throws Exception {
+        String searchUrl = "https://www.culture.ru/search?query=" +
+                URLEncoder.encode(title, "UTF-8");
+
+        String html = downloadHtml(searchUrl);
+        ArrayList<String> links = extractLinks(html, "www.culture.ru", "/poems/");
+
+        if (links.isEmpty()) {
+            links = extractLinks(html, "culture.ru", "/poems/");
+        }
+
+        for (String link : links) {
+            String pageHtml = downloadHtml(link);
+            String poem = extractPoemFromCultureHtml(pageHtml);
+
+            if (!poem.trim().isEmpty()) {
+                return new SearchResult(link, poem);
+            }
+        }
+
+        return null;
+    }
+
+    private SearchResult searchILibrary(String title) throws Exception {
+        String searchUrl = "https://ilibrary.ru/search/?q=" +
+                URLEncoder.encode(title, "UTF-8");
+
+        String html = downloadHtml(searchUrl);
+        ArrayList<String> links = extractLinks(html, "ilibrary.ru", "/text/");
+
+        for (String link : links) {
+            String pageHtml = downloadHtml(link);
+            String poem = extractPoemFromILibraryHtml(pageHtml);
+
+            if (!poem.trim().isEmpty()) {
+                return new SearchResult(link, poem);
+            }
+        }
+
+        return null;
+    }
+
+    private String downloadHtml(String urlText) throws Exception {
+        URL url = new URL(urlText);
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(10000);
+        connection.setReadTimeout(15000);
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 PoemMemorizerApp");
+
+        int responseCode = connection.getResponseCode();
+
+        if (responseCode < 200 || responseCode >= 300) {
+            throw new Exception("Сервер вернул код: " + responseCode);
+        }
+
+        Charset charset = detectCharset(connection.getContentType(), urlText);
+
+        InputStream inputStream = connection.getInputStream();
+        String html = readAllText(inputStream, charset);
+
+        connection.disconnect();
+        return html;
+    }
+
+    private ArrayList<String> extractLinks(String html, String domain, String requiredPart) {
+        ArrayList<String> result = new ArrayList<>();
+        HashSet<String> added = new HashSet<>();
+
+        Pattern pattern = Pattern.compile("(?i)href=[\"']([^\"']+)[\"']");
+        Matcher matcher = pattern.matcher(html);
+
+        while (matcher.find()) {
+            String link = matcher.group(1);
+
+            if (link.startsWith("//")) {
+                link = "https:" + link;
+            } else if (link.startsWith("/")) {
+                link = "https://" + domain + link;
+            }
+
+            if (!link.contains(domain.replace("www.", ""))) {
+                continue;
+            }
+
+            if (!link.contains(requiredPart)) {
+                continue;
+            }
+
+            int hashIndex = link.indexOf('#');
+            if (hashIndex >= 0) {
+                link = link.substring(0, hashIndex);
+            }
+
+            int queryIndex = link.indexOf('?');
+            if (queryIndex >= 0) {
+                link = link.substring(0, queryIndex);
+            }
+
+            if (!added.contains(link)) {
+                added.add(link);
+                result.add(link);
+            }
+        }
+
+        return result;
+    }
+
+    private void openWebPoemSearch(String query) {
+        Intent intent = new Intent(this, SearchWebActivity.class);
+        intent.putExtra("query", query);
+        startActivityForResult(intent, REQUEST_WEB_POEM);
+    }
+
     private boolean isSupportedPoemUrl(String url) {
         return isILibraryUrl(url) || isCulturePoemUrl(url);
     }
@@ -366,6 +737,7 @@ public class MainActivity extends Activity {
                 try {
                     return Charset.forName(matcher.group(1).trim());
                 } catch (Exception ignored) {
+                    // Используем запасной вариант ниже.
                 }
             }
         }
@@ -498,6 +870,7 @@ public class MainActivity extends Activity {
         while (start < lines.size() && isCultureJunkLine(lines.get(start))) {
             start++;
         }
+
         if (lines.size() - start >= 3) {
             start += 2;
         }
@@ -808,12 +1181,15 @@ public class MainActivity extends Activity {
             String actualRaw = currentUnits.get(hiddenIndex).trim();
             String expectedRaw = originalWords.get(hiddenIndex);
 
-            if (actualRaw.isEmpty() || isBlankPlaceholder(actualRaw)) {
+            String actual = normalizeAnswerWord(actualRaw);
+            String expected = normalizeAnswerWord(expectedRaw);
+
+            if (actual.isEmpty() || actualRaw.trim().equals("_")) {
                 missing++;
                 continue;
             }
 
-            if (normalize(actualRaw).equals(normalize(expectedRaw))) {
+            if (actual.equals(expected)) {
                 correct++;
             } else {
                 errors++;
@@ -821,6 +1197,28 @@ public class MainActivity extends Activity {
         }
 
         return new StageCheckResult(total, correct, missing, errors);
+    }
+
+    private String normalizeAnswerWord(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        /*
+         * Засчитываем:
+         * слово
+         * _слово
+         * слово_
+         * _слово_
+         *
+         * Но варианты с пробелом, например "_ слово",
+         * становятся разными токенами и не совпадут по индексам.
+         */
+        return value
+                .replace("_", "")
+                .trim()
+                .toLowerCase(Locale.ROOT)
+                .replace('ё', 'е');
     }
 
     private void repeatCurrentStage() {
@@ -840,9 +1238,10 @@ public class MainActivity extends Activity {
             String actualRaw = currentUnits.get(hiddenIndex).trim();
             String expectedRaw = originalWords.get(hiddenIndex);
 
-            if (!actualRaw.isEmpty()
-                    && !isBlankPlaceholder(actualRaw)
-                    && normalize(actualRaw).equals(normalize(expectedRaw))) {
+            String actual = normalizeAnswerWord(actualRaw);
+            String expected = normalizeAnswerWord(expectedRaw);
+
+            if (!actual.isEmpty() && actual.equals(expected)) {
                 savedAnswers.put(hiddenIndex, actualRaw);
             } else {
                 savedAnswers.remove(hiddenIndex);
@@ -917,10 +1316,10 @@ public class MainActivity extends Activity {
             if (token.isWord && hiddenWordIndexes.contains(token.wordIndex)) {
                 String answer = savedAnswers.get(token.wordIndex);
 
-                if (answer != null && !answer.trim().isEmpty() && !isBlankPlaceholder(answer)) {
+                if (answer != null && !normalizeAnswerWord(answer).isEmpty()) {
                     builder.append(answer.trim());
                 } else {
-                    builder.append("____");
+                    builder.append("_");
                 }
             } else {
                 builder.append(token.text);
@@ -1025,7 +1424,7 @@ public class MainActivity extends Activity {
         nextHideAtElapsedMs = INTERVAL;
 
         urlEditText.setText("");
-        poemEditText.setText("Вставьте ссылку на стих с ilibrary.ru или culture.ru и нажмите «Загрузить стих».");
+        poemEditText.setText(getRulesText());
 
         urlPanel.setVisibility(View.VISIBLE);
 
@@ -1059,10 +1458,10 @@ public class MainActivity extends Activity {
                 continue;
             }
 
-            String expected = normalize(originalWords.get(hiddenIndex));
-            String actual = normalize(currentUnits.get(hiddenIndex));
+            String expected = normalizeAnswerWord(originalWords.get(hiddenIndex));
+            String actual = normalizeAnswerWord(currentUnits.get(hiddenIndex));
 
-            if (!isBlankPlaceholder(actual) && actual.equals(expected)) {
+            if (!actual.isEmpty() && actual.equals(expected)) {
                 correct++;
             }
         }
@@ -1072,7 +1471,8 @@ public class MainActivity extends Activity {
         String note;
 
         if (structureWarning) {
-            note = "Внимание: количество слов/пропусков изменилось. Лучше заменять каждый ____ ровно одним словом, не удаляя остальной текст.";
+            note = "Внимание: количество слов/пропусков изменилось. " +
+                    "Если пишете слово рядом с _, пишите без пробелов.";
         } else if (hiddenWordIndexes.size() == originalWords.size() && correct == total) {
             note = "Отлично: все слова введены правильно.";
         } else {
@@ -1102,6 +1502,22 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
+        if (requestCode == REQUEST_WEB_POEM) {
+            if (resultCode != RESULT_OK || data == null) {
+                return;
+            }
+
+            String poemText = data.getStringExtra("poemText");
+
+            if (poemText == null || poemText.trim().isEmpty()) {
+                Toast.makeText(this, "Текст со страницы не получен.", Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            startNewSession(cleanPoemTextFromWeb(poemText));
+            return;
+        }
+
         if (requestCode != REQUEST_SAVE_PROGRESS) {
             return;
         }
@@ -1111,6 +1527,18 @@ public class MainActivity extends Activity {
         }
 
         saveProgressToUri(data.getData());
+    }
+
+    private String cleanPoemTextFromWeb(String text) {
+        if (text == null) {
+            return "";
+        }
+
+        String result = text.replace('\u00A0', ' ');
+        result = result.replaceAll("[ \t\u000B\f\r]+", " ");
+        result = result.replaceAll(" *\n *", "\n");
+        result = result.replaceAll("\n{3,}", "\n\n");
+        return result.trim();
     }
 
     private void saveProgressToUri(Uri uri) {
@@ -1225,7 +1653,7 @@ public class MainActivity extends Activity {
     private static ArrayList<String> extractWordsAndBlanks(String text) {
         ArrayList<String> result = new ArrayList<>();
 
-        Pattern pattern = Pattern.compile("[\\p{L}\\p{N}]+(?:[-'’][\\p{L}\\p{N}]+)*|_+");
+        Pattern pattern = Pattern.compile("[\\p{L}\\p{N}_]+(?:[-'’][\\p{L}\\p{N}_]+)*|_+");
         Matcher matcher = pattern.matcher(text);
 
         while (matcher.find()) {
@@ -1233,21 +1661,6 @@ public class MainActivity extends Activity {
         }
 
         return result;
-    }
-
-    private static boolean isBlankPlaceholder(String value) {
-        return value != null && value.trim().matches("_+");
-    }
-
-    private static String normalize(String value) {
-        if (value == null) {
-            return "";
-        }
-
-        return value
-                .trim()
-                .toLowerCase(Locale.ROOT)
-                .replace('ё', 'е');
     }
 
     private static String formatDuration(long millis) {
@@ -1283,6 +1696,16 @@ public class MainActivity extends Activity {
             this.correct = correct;
             this.percent = percent;
             this.note = note;
+        }
+    }
+
+    private static class SearchResult {
+        final String url;
+        final String text;
+
+        SearchResult(String url, String text) {
+            this.url = url;
+            this.text = text;
         }
     }
 

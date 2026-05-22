@@ -1,33 +1,45 @@
-<?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/mainRoot"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:paddingLeft="16dp"
+    android:paddingRight="16dp"
+    android:paddingTop="40dp"
+    android:paddingBottom="24dp"
+    android:background="@drawable/wood_background"
+    tools:context=".MainActivity">
 
     <LinearLayout
         android:id="@+id/urlPanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingBottom="8dp">
+        android:background="#D8B878"
+        android:padding="8dp"
+        android:layout_marginBottom="12dp">
 
         <EditText
             android:id="@+id/urlEditText"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Вставьте ссылку с ilibrary.ru или culture.ru"
-            android:inputType="textUri"
+            android:layout_height="48dp"
+            android:hint="Название стихотворения или ссылка"
             android:singleLine="true"
-            android:textSize="15sp"
-            android:padding="8dp" />
+            android:textColor="#000000"
+            android:textColorHint="#555555"
+            android:background="#E6C993"
+            android:backgroundTint="#E6C993"
+            android:paddingLeft="12dp"
+            android:paddingRight="12dp" />
 
         <Button
-            android:id="@+id/loadInternetButton"
+            android:id="@+id/searchMenuButton"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Загрузить стих" />
+            android:layout_height="48dp"
+            android:text="▼ Поиск"
+            android:textColor="#000000"
+            android:backgroundTint="#E6C993"
+            android:layout_marginTop="8dp" />
 
     </LinearLayout>
 
@@ -35,61 +47,44 @@
         android:id="@+id/timerScoreTextView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Время: 00:00:00 | Балл: 100/100"
-        android:textSize="16sp"
-        android:paddingBottom="8dp" />
+        android:text="Время: 00:00:00 | Балл: 100/100 | Скрыто: 0/0"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="#000000"
+        android:layout_marginBottom="12dp" />
 
     <ScrollView
         android:id="@+id/poemScrollView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
+        android:layout_marginBottom="12dp"
+        android:background="#E6C993"
         android:fillViewport="true">
 
         <EditText
             android:id="@+id/poemEditText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:background="#E6C993"
+            android:backgroundTint="#E6C993"
             android:gravity="top|start"
-            android:minLines="20"
-            android:textSize="18sp"
-            android:inputType="textMultiLine|textNoSuggestions"
-            android:singleLine="false"
-            android:overScrollMode="always"
-            android:background="@android:drawable/edit_text"
-            android:padding="10dp"
-            android:hint="Здесь будет стих..." />
+            android:hint="Здесь будет отображаться текст стиха"
+            android:textColorHint="#555555"
+            android:textColor="#000000"
+            android:inputType="textMultiLine|textCapSentences"
+            android:minHeight="150dp"
+            android:padding="12dp"
+            android:textSize="16sp" />
 
     </ScrollView>
 
-    <LinearLayout
-        android:id="@+id/bottomButtonsLayout"
+    <Button
+        android:id="@+id/actionsMenuButton"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:paddingTop="8dp">
-
-        <Button
-            android:id="@+id/nextStageButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Следующий этап" />
-
-        <Button
-            android:id="@+id/saveButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Сохранить" />
-
-        <Button
-            android:id="@+id/checkButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Проверить" />
-
-    </LinearLayout>
+        android:layout_height="48dp"
+        android:text="▲ Действия"
+        android:textColor="#000000"
+        android:backgroundTint="#E6C993" />
 
 </LinearLayout>
