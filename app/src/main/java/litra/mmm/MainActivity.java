@@ -148,7 +148,7 @@ public class MainActivity extends Activity {
                 if (url.isEmpty()) {
                     Toast.makeText(
                             MainActivity.this,
-                            "Введите прямую ссылку на стихотворение.",
+                            "Вставьте прямую ссылку на стихотворение.",
                             Toast.LENGTH_SHORT
                     ).show();
                     return;
