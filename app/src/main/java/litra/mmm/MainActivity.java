@@ -57,6 +57,7 @@ public class MainActivity extends Activity {
     private static final long INTERVAL = 5 * 60 * 1000L;
 
     private static final int REQUEST_SAVE_PROGRESS = 200;
+    private static final int REQUEST_WEB_SEARCH = 201;
     private static final int REQUEST_WEB_POEM = 201;
 
     private LinearLayout urlPanel;
@@ -73,6 +74,7 @@ public class MainActivity extends Activity {
     private Button nextStageButton;
     private Button saveButton;
     private Button checkButton;
+    private Button mainMenuButton;
 
     private PopupWindow searchPopup;
     private PopupWindow actionsPopup;
@@ -134,6 +136,7 @@ public class MainActivity extends Activity {
 
         nextStageButton = createActionButton("Следующий этап");
         checkButton = createActionButton("Проверить");
+        mainMenuButton = createActionButton("Главный экран");
         saveButton = createActionButton("Сохранить стих");
 
         nextStageButton.setEnabled(false);
@@ -154,16 +157,24 @@ public class MainActivity extends Activity {
                     return;
                 }
 
-                if (!isSupportedPoemUrl(url)) {
+                if (!isHttpUrl(url)) {
                     Toast.makeText(
                             MainActivity.this,
-                            "Кнопка «Найти по ссылке» работает только с прямыми ссылками ilibrary.ru или culture.ru.",
+                            "Это не ссылка. Для названия используйте кнопку «Найти в интернете».",
                             Toast.LENGTH_LONG
                     ).show();
                     return;
                 }
 
-                downloadPoemFromInternet(url);
+                if (searchPopup != null && searchPopup.isShowing()) {
+                    searchPopup.dismiss();
+                }
+
+                if (isSupportedPoemUrl(url)) {
+                    downloadPoemFromInternet(url);
+                } else {
+                    openWebSearchWithQuery(url);
+                }
             }
         });
 
@@ -175,13 +186,17 @@ public class MainActivity extends Activity {
                 if (query.isEmpty()) {
                     Toast.makeText(
                             MainActivity.this,
-                            "Введите название стихотворения для поиска в интернете.",
+                            "Введите название стихотворения.",
                             Toast.LENGTH_SHORT
                     ).show();
                     return;
                 }
 
-                openWebPoemSearch(query);
+                if (searchPopup != null && searchPopup.isShowing()) {
+                    searchPopup.dismiss();
+                }
+
+                openWebSearchWithQuery(query);
             }
         });
 
@@ -203,6 +218,27 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View view) {
                 showCheckResult();
+            }
+        });
+
+        mainMenuButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                boolean alreadyInMainScreen =
+                        originalText.trim().isEmpty()
+                                && !sessionActive
+                                && hiddenWordIndexes.isEmpty();
+
+                if (alreadyInMainScreen) {
+                    Toast.makeText(
+                            MainActivity.this,
+                            "Вы уже на главном экране.",
+                            Toast.LENGTH_SHORT
+                    ).show();
+                    return;
+                }
+
+                returnToMainScreen();
             }
         });
 
@@ -251,7 +287,7 @@ public class MainActivity extends Activity {
                 "4. Если пишете слово, не удаляя черту _, пишите без пробелов.\n" +
                 "Правильно: _слово, слово_ или _слово_.\n" +
                 "Неправильно: _ слово, слово _ или _ слово _.\n\n" +
-                "Кнопки «Следующий этап», «Проверить» и «Сохранить стих» находятся в меню «Действия».";
+                "Кнопки «Следующий этап», «Проверить», «Главный экран» и «Сохранить стих» находятся в меню «Действия».";
     }
 
     private Button createActionButton(String text) {
@@ -308,10 +344,12 @@ public class MainActivity extends Activity {
 
         removeFromParent(nextStageButton);
         removeFromParent(checkButton);
+        removeFromParent(mainMenuButton);
         removeFromParent(saveButton);
 
         layout.addView(nextStageButton);
         layout.addView(checkButton);
+        layout.addView(mainMenuButton);
         layout.addView(saveButton);
 
         actionsPopup = new PopupWindow(
@@ -643,6 +681,30 @@ public class MainActivity extends Activity {
         startActivityForResult(intent, REQUEST_WEB_POEM);
     }
 
+    private void openWebSearchWithQuery(String query) {
+        if (query == null || query.trim().isEmpty()) {
+            Toast.makeText(
+                    MainActivity.this,
+                    "Введите название стихотворения или ссылку.",
+                    Toast.LENGTH_SHORT
+            ).show();
+            return;
+        }
+
+        Intent intent = new Intent(MainActivity.this, SearchWebActivity.class);
+        intent.putExtra("query", query.trim());
+        startActivityForResult(intent, REQUEST_WEB_SEARCH);
+    }
+
+    private boolean isHttpUrl(String url) {
+        if (url == null) {
+            return false;
+        }
+
+        String lower = url.toLowerCase(Locale.ROOT);
+        return lower.startsWith("http://") || lower.startsWith("https://");
+    }
+
     private boolean isSupportedPoemUrl(String url) {
         return isILibraryUrl(url) || isCulturePoemUrl(url);
     }
@@ -695,7 +757,14 @@ public class MainActivity extends Activity {
 
                     connection.disconnect();
 
-                    String poemText = extractPoemFromSupportedSite(urlText, html);
+                    String poemText;
+
+                    if (isSupportedPoemUrl(urlText)) {
+                        poemText = extractPoemFromSupportedSite(urlText, html);
+                    } else {
+                        poemText = cleanPoemTextFromWeb(htmlToPlainText(html));
+                    }
+
                     final String finalText = poemText.trim();
 
                     if (finalText.isEmpty()) {
@@ -1518,15 +1587,31 @@ public class MainActivity extends Activity {
             return;
         }
 
-        if (requestCode != REQUEST_SAVE_PROGRESS) {
+        if (requestCode == REQUEST_WEB_SEARCH) {
+            if (resultCode == RESULT_OK && data != null) {
+                String poemText = data.getStringExtra("poemText");
+
+                if (poemText != null && !poemText.trim().isEmpty()) {
+                    startNewSession(poemText.trim());
+                } else {
+                    Toast.makeText(
+                            MainActivity.this,
+                            "Не удалось получить текст со страницы.",
+                            Toast.LENGTH_LONG
+                    ).show();
+                }
+            }
+
             return;
         }
 
-        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
-            return;
-        }
+        if (requestCode == REQUEST_SAVE_PROGRESS) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                return;
+            }
 
-        saveProgressToUri(data.getData());
+            saveProgressToUri(data.getData());
+        }
     }
 
     private String cleanPoemTextFromWeb(String text) {
